@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // 攻略悬浮窗 GuideOverlay v1.1.0 — 单文件源码（C# 5 / WinForms / System.Drawing）
 // 编译：双击 build.bat（使用 Windows 自带 csc，无需 Visual Studio / MSBuild / NuGet）
 // 自测：双击 selftest.bat（或 GuideOverlay.exe --selftest）
@@ -58,7 +58,7 @@ internal enum WindowPreset { Left, CenterH, Right, Top, CenterV, Bottom, ResetDe
 
 internal enum RotateOp { None = 0, Rotate90 = 1, Rotate180 = 2, Rotate270 = 3, FlipH = 4, FlipV = 5 }
 
-internal enum ToolbarButton { None = -1, Prev = 0, Page = 1, Next = 2, Fit = 3, OneToOne = 4, LongMode = 5, Settings = 6, Close = 7, LockImage = 8 }
+internal enum ToolbarButton { None = -1, Prev = 0, Page = 1, Next = 2, Fit = 3, OneToOne = 4, LongMode = 5, Settings = 6, Close = 7, LockImage = 8, Minimize = 9 }
 
 internal enum CardButton { None = -1, ChooseFolder = 0, OpenFolder = 1, Rescan = 2 }
 
@@ -147,6 +147,7 @@ internal static class Layout
     public const int ToolbarLongWidthDip = 56;
     public const int ToolbarSettingsWidthDip = 60;
     public const int ToolbarCloseWidthDip = 28;
+    public const int ToolbarMinimizeWidthDip = 28;      // B10：「-」最小化到任务栏（× 左边）
 
     public const int ResizeGripDip = 12;
     public const int SnapThresholdDip = 12;
@@ -1219,11 +1220,11 @@ internal static class ViewMath
 
     // ---------- 工具条 / 空状态 / toast / 滚动条几何 ----------
     // 顶部居中、高 32 DIP、左右各 8 DIP 边距（§8.1）。
-    // 按钮顺序固定：◀ | 页码 | ▶ | 适应窗口 | 锁图 | [长图] | 设置… | ×。
+    // 按钮顺序固定：◀ | 页码 | ▶ | 适应窗口 | 锁图 | [长图] | 设置… | − | ×。
     // 页码只读（Enabled=false，命中测试返回 None）；无图片时 0/0 且翻页/适应 禁用。
     // 宽度 = 内边距*2 + 各按钮宽 + 间距*(n-1)，**永不压缩按钮宽度**。
     // 放不下时（barW > 客户区宽 − 2*8 DIP）按优先级**渐进隐藏可选按钮**：
-    //   × → [长图] → 锁图 → 适应窗口；每移除一个重算，直到放得下。
+    //   × → − → [长图] → 锁图 → 适应窗口；每移除一个重算，直到放得下。
     //   剩下的 ◀/页码/▶/设置… 约 200 DIP，240 DIP 最小窗口也能完整容纳。
     //   极端小窗仍放不下时允许贴左溢出（自测只断言正常尺寸下不重叠/不出界）。
     public static ToolbarLayout ToolbarGeometry(Size client, int dpi, bool showLongToggle,
@@ -1267,9 +1268,11 @@ internal static class ViewMath
         }
         AddToolbarSpec(specs, widthsDip, ToolbarButton.Settings, "设置…", true, Layout.ToolbarSettingsWidthDip);
         // × = 退出程序（关闭主窗口并释放资源），不是隐藏；隐藏请用 Ctrl+Alt+G 或右键菜单。
-        // 窄窗口放不下时它也是第一个被渐进隐藏的。
+        // − = 最小化到任务栏（B10，放在 × 左边）；恢复后自动回到「不占任务栏」的穿透形态。
+        // 窄窗口放不下时它们也是最先被渐进隐藏的。
         if (canClose)
         {
+            AddToolbarSpec(specs, widthsDip, ToolbarButton.Minimize, "−", true, Layout.ToolbarMinimizeWidthDip);
             AddToolbarSpec(specs, widthsDip, ToolbarButton.Close, "×", true, Layout.ToolbarCloseWidthDip);
         }
 
@@ -1279,7 +1282,7 @@ internal static class ViewMath
         if (maxW < 0) { maxW = 0; }
         ToolbarButton[] hideOrder = new ToolbarButton[]
         {
-            ToolbarButton.Close, ToolbarButton.LongMode, ToolbarButton.LockImage, ToolbarButton.Fit
+            ToolbarButton.Close, ToolbarButton.Minimize, ToolbarButton.LongMode, ToolbarButton.LockImage, ToolbarButton.Fit
         };
         for (int i = 0; i < hideOrder.Length && barW > maxW; i++)
         {
@@ -1863,6 +1866,8 @@ internal sealed class AppSettings
 
     // [meta]（B1：首次运行引导；0/1）
     public bool FirstRun;                  // true = 启动后显示首次运行引导并自动写回 0
+    // [meta]（B8：低权限启动提示只问一次；0/1）
+    public bool LowIntegrityAck;           // true = 用户已选过「仍要运行」，之后低权限启动不再弹窗
 
     // [images]
     public string FolderSetting = "images"; // ini 中原始值（相对 exe 或绝对）
@@ -2673,6 +2678,12 @@ internal static class SettingsStore
         {
             s.FirstRun = firstRun == 1;
         }
+        // low_integrity_ack 只认 0/1：缺键 = 未确认（下次低权限启动仍会问一次）
+        int lowAck;
+        if (TryGetInt(map, "meta", "low_integrity_ack", out lowAck))
+        {
+            s.LowIntegrityAck = lowAck == 1;
+        }
 
         // ---- [ui] ----
         string theme = GetString(map, "ui", "theme", null);
@@ -2805,6 +2816,7 @@ internal static class SettingsStore
         // [meta] 不写进 [window]：first_run=0 表示首次运行引导已完成（B1）
         sb.AppendLine("[meta]");
         sb.AppendLine("first_run=" + (s.FirstRun ? "1" : "0"));
+        sb.AppendLine("low_integrity_ack=" + (s.LowIntegrityAck ? "1" : "0"));
         sb.AppendLine();
 
         sb.AppendLine("[hotkeys]");
@@ -5570,6 +5582,7 @@ internal sealed partial class OverlayForm : Form
     private bool _menuClearedNoActivate;            // 弹菜单时是否临时清掉了 NOACTIVATE
     private bool _settingsPanelLockedBefore;        // 打开设置面板前的锁定状态
     private bool _closing;                          // 正在关闭
+    private bool _taskbarMinimize;                  // B10：− 最小化到任务栏期间为 true（此时临时显示任务栏按钮）
     private bool _cleanupDone;                      // FormClosing 清理是否已执行
     private bool _suppressWatcher;                  // 自己重扫时忽略 watcher 事件
     private bool _startupSummaryShown;              // 启动汇总只显示一次
@@ -5725,7 +5738,11 @@ internal sealed partial class OverlayForm : Form
             CreateParams cp = base.CreateParams;
             // 实测：ShowInTaskbar=false 不会自动加 WS_EX_TOOLWINDOW，必须显式加，
             // 否则窗口可能出现在 Alt+Tab。注意：绝不手动改 WS_EX_LAYERED。
-            cp.ExStyle |= Win32Const.WS_EX_TOOLWINDOW;
+            // B10：点「−」最小化到任务栏期间不加 TOOLWINDOW，这样任务栏才有按钮；恢复后自动加回。
+            if (!_taskbarMinimize)
+            {
+                cp.ExStyle |= Win32Const.WS_EX_TOOLWINDOW;
+            }
             return cp;
         }
     }
@@ -5773,13 +5790,19 @@ internal sealed partial class OverlayForm : Form
             StartWatcher();
             ApplyTopMost();
             DetectRestrictedEnvironment();
-            // C8：低权限启动时先让用户明确选择「退出 / 仍要运行」，而不是默默进入锁定态。
+            // C8/B8：低权限启动时先让用户明确选择「退出 / 仍要运行」，而不是默默进入锁定态。
+            // 选过「仍要运行」后写 [meta] low_integrity_ack=1，之后不再每次都弹（只保留启动 toast 说明原因）。
             // 自测模式不会走到这里（SelfTestMode 分支在上方），所以绝不会有弹窗卡住 selftest。
-            if (_lowIntegrityDetected && !ConfirmLowIntegrityStartup())
+            if (_lowIntegrityDetected && !Settings.LowIntegrityAck)
             {
-                ExitRequested = true;
-                try { Close(); } catch { }
-                return;
+                if (!ConfirmLowIntegrityStartup())
+                {
+                    ExitRequested = true;
+                    try { Close(); } catch { }
+                    return;
+                }
+                Settings.LowIntegrityAck = true;
+                try { SaveNow(); } catch { }
             }
             StartFirstRunGuide();
         }
@@ -5824,28 +5847,31 @@ internal sealed partial class OverlayForm : Form
                 dialog.MinimizeBox = false;
                 dialog.ShowIcon = false;
                 dialog.TopMost = true;
-                dialog.ClientSize = new Size(global::Layout.Px(420, dpi), global::Layout.Px(168, dpi));
+                dialog.ClientSize = new Size(global::Layout.Px(420, dpi), global::Layout.Px(200, dpi));
 
                 Label label = new Label();
-                label.Text = "当前权限受限（可能是从压缩包、网盘或沙箱里直接运行），"
-                    + "窗口可能无法切换点击穿透，按住门控键也可能无效。\r\n\r\n"
-                    + "建议先退出，把 " + AppInfo.ExeName + " 解压到本地文件夹后，以普通用户权限重新启动。";
-                label.Location = new Point(global::Layout.Px(16, dpi), global::Layout.Px(13, dpi));
-                label.Size = new Size(global::Layout.Px(388, dpi), global::Layout.Px(88, dpi));
+                label.Text = "当前进程以「低权限」运行：窗口可能无法点击穿透，按住门控键也可能无效。"
+                    + "\r\n\r\n"
+                    + "常见原因：exe 是从压缩包、网盘或聊天软件里直接打开的，或由低权限程序生成。"
+                    + "\r\n\r\n"
+                    + "建议退出后把整个文件夹解压/复制到本地目录，再从资源管理器双击启动。"
+                    + "本次选择「仍要运行」后，以后不再弹这个提示。";
+                label.Location = new Point(global::Layout.Px(16, dpi), global::Layout.Px(12, dpi));
+                label.Size = new Size(global::Layout.Px(388, dpi), global::Layout.Px(132, dpi));
                 dialog.Controls.Add(label);
 
                 Button runButton = new Button();
                 runButton.Text = "仍要运行";
                 runButton.DialogResult = DialogResult.OK;
                 runButton.Size = new Size(global::Layout.Px(96, dpi), global::Layout.Px(30, dpi));
-                runButton.Location = new Point(global::Layout.Px(196, dpi), global::Layout.Px(120, dpi));
+                runButton.Location = new Point(global::Layout.Px(196, dpi), global::Layout.Px(154, dpi));
                 dialog.Controls.Add(runButton);
 
                 Button exitButton = new Button();
                 exitButton.Text = "退出";
                 exitButton.DialogResult = DialogResult.Cancel;
                 exitButton.Size = new Size(global::Layout.Px(96, dpi), global::Layout.Px(30, dpi));
-                exitButton.Location = new Point(global::Layout.Px(308, dpi), global::Layout.Px(120, dpi));
+                exitButton.Location = new Point(global::Layout.Px(308, dpi), global::Layout.Px(154, dpi));
                 dialog.Controls.Add(exitButton);
 
                 dialog.AcceptButton = runButton;
@@ -5869,6 +5895,15 @@ internal sealed partial class OverlayForm : Form
     {
         base.OnResize(e);
         if (_closing || !IsHandleCreated) { return; }
+
+        // B10：最小化到任务栏期间不做任何几何/缩放调整；从任务栏恢复后回到原来的穿透形态。
+        if (WindowState == FormWindowState.Minimized) { return; }
+        if (_taskbarMinimize)
+        {
+            // ShowInTaskbar 变化会重建句柄，这里延后执行，避免在 OnResize 里重入。
+            try { BeginInvoke(new MethodInvoker(RestoreFromTaskbarMinimize)); } catch { }
+            return;
+        }
 
         if (ResizingWindow)
         {
@@ -5898,6 +5933,39 @@ internal sealed partial class OverlayForm : Form
             InvalidateViewport();
         }
         RaiseStateChanged();
+    }
+
+    // ========================================================================
+    // B10：− 最小化到任务栏
+    // 平时窗口带 WS_EX_TOOLWINDOW + ShowInTaskbar=false（不占任务栏、不进 Alt+Tab）；
+    // 点「−」时临时打开 ShowInTaskbar 并去掉 TOOLWINDOW，最小化后任务栏出现按钮；
+    // 从任务栏恢复后立刻还原，回到默认的穿透形态。
+    // ========================================================================
+    internal void MinimizeOverlay()
+    {
+        if (SelfTestMode) { return; }
+        try
+        {
+            _taskbarMinimize = true;
+            if (!ShowInTaskbar) { ShowInTaskbar = true; }
+            WindowState = FormWindowState.Minimized;
+        }
+        catch (Exception)
+        {
+            _taskbarMinimize = false;
+            try { ShowInTaskbar = false; } catch { }
+        }
+    }
+
+    private void RestoreFromTaskbarMinimize()
+    {
+        if (!_taskbarMinimize) { return; }
+        _taskbarMinimize = false;
+        try { ShowInTaskbar = false; } catch { }
+        try { ApplyExtendedStyles(); } catch { }
+        try { ApplyTopMost(); } catch { }
+        try { PollGateState(); } catch { }
+        InvalidateViewport();
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -7143,10 +7211,14 @@ internal sealed partial class OverlayForm : Form
             case ToolbarButton.Settings:
                 OpenSettingsPanel(SettingsSection.Images);
                 break;
+            case ToolbarButton.Minimize:
+                // B10：− = 最小化到任务栏（最小化期间临时显示任务栏按钮，点任务栏即可恢复）
+                MinimizeOverlay();
+                break;
             case ToolbarButton.Close:
-                // B4：× = 隐藏窗口（与 Ctrl+Alt+G 同语义），不再直接退出程序；
-                // 彻底退出请用右键菜单「退出」（保留真正退出入口）。
-                HideOverlay();
+                // B9：× = 彻底退出程序（用户反馈「点了 × 关不掉，只能在任务管理器里结束」）。
+                // 隐藏窗口仍可用 Ctrl+Alt+G 或右键「隐藏窗口」；退出走 OnFormClosing 的正常清理（保存配置、注销热键）。
+                Close();
                 break;
         }
     }
@@ -10498,6 +10570,7 @@ internal sealed partial class OverlayForm
             case ToolbarButton.LongMode: return "长图";
             case ToolbarButton.Settings: return "设置…";
             case ToolbarButton.Close: return "×";
+            case ToolbarButton.Minimize: return "−";
             case ToolbarButton.Page: return "0/0";
             default: return "";
         }
@@ -14183,10 +14256,11 @@ internal static class SelfTestRunner
         int dpi = 96;
         Size client = new Size(520, 756);
 
-        // 完整工具条（12 张图、当前第 3 张、有 × 按钮、无长图开关）
+        // 完整工具条（12 张图、当前第 3 张、有 −/× 按钮、无长图开关）
         ToolbarLayout full = ViewMath.ToolbarGeometry(client, dpi, false, 12, 2, true);
-        CheckRect(full.Bar, new Rectangle(78, 0, 364, 32), "工具条：520x756@96 整条矩形 (78,0,364x32)");
+        CheckRect(full.Bar, new Rectangle(62, 0, 396, 32), "工具条：520x756@96 整条矩形 (62,0,396x32)");
         Check(full.Find(ToolbarButton.Close) != null, "工具条：有 × 按钮");
+        Check(full.Find(ToolbarButton.Minimize) != null, "工具条：有 − 最小化按钮");
         Check(full.Find(ToolbarButton.LockImage) != null, "工具条：有「锁图」按钮");
         Check(full.Find(ToolbarButton.LockImage).Text == "锁图", "工具条：「锁图」按钮文本");
         Check(full.Find(ToolbarButton.OneToOne) == null, "工具条：100% 已移出工具条（仍可从菜单/设置面板使用）");
@@ -14197,14 +14271,14 @@ internal static class SelfTestRunner
         ToolbarItem page = full.Find(ToolbarButton.Page);
         ToolbarItem next = full.Find(ToolbarButton.Next);
         Check(prev != null && next != null && page != null, "工具条：◀/页码/▶ 三个按钮都存在");
-        if (prev != null) { CheckRect(prev.Rect, new Rectangle(86, 0, 28, 32), "工具条：◀ 按钮矩形"); }
+        if (prev != null) { CheckRect(prev.Rect, new Rectangle(70, 0, 28, 32), "工具条：◀ 按钮矩形"); }
         if (page != null)
         {
-            CheckRect(page.Rect, new Rectangle(118, 0, 56, 32), "工具条：页码按钮矩形");
+            CheckRect(page.Rect, new Rectangle(102, 0, 56, 32), "工具条：页码按钮矩形");
             CheckStr(page.Text, "3/12", "工具条：页码文本 3/12");
             Check(!page.Enabled, "工具条：页码只读（Enabled=false）");
         }
-        if (next != null) { CheckRect(next.Rect, new Rectangle(178, 0, 28, 32), "工具条：▶ 按钮矩形"); }
+        if (next != null) { CheckRect(next.Rect, new Rectangle(162, 0, 28, 32), "工具条：▶ 按钮矩形"); }
 
         // 按钮顺序
         Check(full.Items.Count >= 3
@@ -14246,18 +14320,29 @@ internal static class SelfTestRunner
             Check(ViewMath.HitTestToolbar(full, RectCenter(close.Rect)) == ToolbarButton.Close,
                 "工具条命中：× 返回 Close");
         }
+        ToolbarItem minimize = full.Find(ToolbarButton.Minimize);
+        if (minimize != null)
+        {
+            CheckStr(minimize.Text, "−", "工具条：− 按钮文本");
+            CheckRect(minimize.Rect, new Rectangle(390, 0, 28, 32), "工具条：− 按钮矩形（× 左边）");
+            Check(minimize.Rect.Right <= close.Rect.Left, "工具条：− 在 × 左边且不重叠");
+            Check(ViewMath.HitTestToolbar(full, RectCenter(minimize.Rect)) == ToolbarButton.Minimize,
+                "工具条命中：− 返回 Minimize");
+        }
         ToolbarItem lockItem = full.Find(ToolbarButton.LockImage);
         if (lockItem != null)
         {
             Check(ViewMath.HitTestToolbar(full, RectCenter(lockItem.Rect)) == ToolbarButton.LockImage,
                 "工具条命中：锁图返回 LockImage");
-            CheckRect(lockItem.Rect, new Rectangle(286, 0, 52, 32), "工具条：锁图按钮矩形（沿用原 100% 位置）");
+            CheckRect(lockItem.Rect, new Rectangle(270, 0, 52, 32), "工具条：锁图按钮矩形（沿用原 100% 位置）");
         }
-        Check(full.Items.Count >= 6
+        Check(full.Items.Count >= 8
             && full.Items[3].Kind == ToolbarButton.Fit
             && full.Items[4].Kind == ToolbarButton.LockImage
-            && full.Items[5].Kind == ToolbarButton.Settings,
-            "工具条：按钮顺序 适应窗口 | 锁图 | 设置…");
+            && full.Items[5].Kind == ToolbarButton.Settings
+            && full.Items[6].Kind == ToolbarButton.Minimize
+            && full.Items[7].Kind == ToolbarButton.Close,
+            "工具条：按钮顺序 适应窗口 | 锁图 | 设置… | − | ×");
         Check(ViewMath.HitTestToolbar(full, new Point(0, 16)) == ToolbarButton.None,
             "工具条命中：工具条左侧空白返回 None");
         Check(ViewMath.HitTestToolbar(full, new Point(146, 40)) == ToolbarButton.None,
@@ -14282,12 +14367,12 @@ internal static class SelfTestRunner
         // 144 DPI
         Size hidpiClient = new Size(780, 1134);
         ToolbarLayout hi = ViewMath.ToolbarGeometry(hidpiClient, 144, false, 12, 2, true);
-        CheckRect(hi.Bar, new Rectangle(117, 0, 546, 48), "工具条：780x1134@144 整条矩形 (117,0,546x48)");
+        CheckRect(hi.Bar, new Rectangle(93, 0, 594, 48), "工具条：780x1134@144 整条矩形 (93,0,594x48)");
         CheckToolbarLayout("工具条（144 DPI）", hi, hidpiClient);
         ToolbarItem hiPrev = hi.Find(ToolbarButton.Prev);
         if (hiPrev != null)
         {
-            CheckRect(hiPrev.Rect, new Rectangle(129, 0, 42, 48), "工具条：144 DPI 下 ◀ 按钮矩形");
+            CheckRect(hiPrev.Rect, new Rectangle(105, 0, 42, 48), "工具条：144 DPI 下 ◀ 按钮矩形");
             Check(ViewMath.HitTestToolbar(hi, RectCenter(hiPrev.Rect)) == ToolbarButton.Prev,
                 "工具条命中：144 DPI 下 ◀ 返回 Prev");
         }
@@ -14296,6 +14381,7 @@ internal static class SelfTestRunner
         Size tiny = new Size(240, 180);
         ToolbarLayout tinyLayout = ViewMath.ToolbarGeometry(tiny, dpi, true, 3, 0, true);
         Check(tinyLayout.Find(ToolbarButton.Close) == null, "工具条（窄窗）：× 已渐进隐藏");
+        Check(tinyLayout.Find(ToolbarButton.Minimize) == null, "工具条（窄窗）：− 已渐进隐藏");
         Check(tinyLayout.Find(ToolbarButton.LongMode) == null, "工具条（窄窗）：长图开关已渐进隐藏");
         Check(tinyLayout.Find(ToolbarButton.LockImage) == null, "工具条（窄窗）：锁图已渐进隐藏");
         Check(tinyLayout.Find(ToolbarButton.Fit) == null, "工具条（窄窗）：适应窗口已渐进隐藏");
@@ -14306,6 +14392,7 @@ internal static class SelfTestRunner
 
         ToolbarLayout noClose = ViewMath.ToolbarGeometry(client, dpi, false, 12, 2, false);
         Check(noClose.Find(ToolbarButton.Close) == null, "工具条：canClose=false 时不出现 × 按钮");
+        Check(noClose.Find(ToolbarButton.Minimize) == null, "工具条：canClose=false 时不出现 − 按钮");
         CheckToolbarLayout("工具条（无 × 按钮）", noClose, client);
 
         // 空布局（客户区非法）不抛异常
@@ -14730,6 +14817,7 @@ internal static class SelfTestRunner
         Check(defaults.Theme == ThemeKind.Light, "settings 默认：theme = light");
         Check(defaults.GateKey == GateKeyKind.Alt, "settings 默认：gate_key = Alt");
         Check(defaults.FirstRun, "settings 默认：ini 不存在 → first_run = true（首次运行）");
+        Check(!defaults.LowIntegrityAck, "settings 默认：low_integrity_ack = false（低权限提示尚未确认）");
         Check(defaults.TopMost && defaults.Snap && defaults.Watch && !defaults.PositionLocked,
             "settings 默认：topmost/snap/watch=1、locked=0");
         Check(SamePathText(defaults.Folder, SettingsStore.DefaultImageFolder(_exeDir)),
@@ -14841,6 +14929,13 @@ internal static class SelfTestRunner
         Check(SettingsStore.Load(_exeDir, firstRun1).FirstRun,
             "settings 解析：first_run=1 → 仍需首次运行引导");
 
+        // (3c) [meta] low_integrity_ack 三态（B8）：缺键 = false；显式 1 才算已确认
+        Check(!oldS.LowIntegrityAck, "settings 解析：ini 无 low_integrity_ack → false（仍会提示一次）");
+        string lowAck1 = Path.Combine(dir, "lowack1.ini");
+        WriteUtf8(lowAck1, "[meta]\r\nlow_integrity_ack=1\r\n");
+        Check(SettingsStore.Load(_exeDir, lowAck1).LowIntegrityAck,
+            "settings 解析：low_integrity_ack=1 → 已确认（不再弹低权限提示）");
+
         // (4) 完整往返：写回再读回，字段一致
         string roundTrip = Path.Combine(dir, "roundtrip.ini");
         AppSettings w = SettingsStore.Load(_exeDir, roundTrip);
@@ -14865,12 +14960,14 @@ internal static class SelfTestRunner
         w.SetHotkey(HotkeyAction.ZoomIn, Keys.Control | Keys.Shift | Keys.Z);
         w.SetHotkey(HotkeyAction.Jump9, Keys.None);
         w.FirstRun = false;   // 模拟引导已完成 → 应写回 first_run=0
+        w.LowIntegrityAck = true;  // 模拟用户选过「仍要运行」→ 应写回 low_integrity_ack=1
         SettingsStore.SaveTo(w, roundTrip);
         Check(File.Exists(roundTrip), "settings 往返：ini 已写出", roundTrip);
         string roundTripText = "";
         try { roundTripText = File.ReadAllText(roundTrip); } catch { }
         CheckContains(roundTripText, "[meta]", "settings 往返：[meta] 分区已写出");
         CheckContains(roundTripText, "first_run=0", "settings 往返：引导完成写回 first_run=0");
+        CheckContains(roundTripText, "low_integrity_ack=1", "settings 往返：低权限确认写回 low_integrity_ack=1");
 
         // C7：ini 必须带 UTF-8 BOM（记事本等按 ANSI 误判会导致中文乱码）
         byte[] roundTripBytes = new byte[0];
