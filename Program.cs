@@ -1,5 +1,5 @@
 // ============================================================================
-// 攻略悬浮窗 GuideOverlay v1.1.0 — 单文件源码（C# 5 / WinForms / System.Drawing）
+// 攻略悬浮窗 GuideOverlay v1.1.1 — 单文件源码（C# 5 / WinForms / System.Drawing）
 // 编译：双击 build.bat（使用 Windows 自带 csc，无需 Visual Studio / MSBuild / NuGet）
 // 自测：双击 selftest.bat（或 GuideOverlay.exe --selftest）
 // 本文件即完整实现：全部 UI 自绘，无第三方库、无注入/Hook/模拟输入、无网络/注册表/管理员。
@@ -22,10 +22,10 @@ using System.Reflection;
 
 // ============================================================================
 // 程序集资源 — 让 exe 的「属性 → 详细信息」显示真实版本/产品名（A1）
-// 版本号必须与 AppInfo.Version（1.1.0）保持一致；AssemblyVersion 用四段 5.0.0.0。
+// 版本号必须与 AppInfo.Version（1.1.1）保持一致；AssemblyVersion 用四段 1.1.1.0。
 // ============================================================================
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.1.1.0")]
+[assembly: AssemblyFileVersion("1.1.1.0")]
 [assembly: AssemblyProduct("攻略悬浮窗 GuideOverlay")]
 [assembly: AssemblyTitle("攻略悬浮窗")]
 
@@ -37,7 +37,7 @@ using System.Reflection;
 
 internal static class AppInfo
 {
-    public const string Version = "1.1.0";
+    public const string Version = "1.1.1";
     public const string AppName = "攻略悬浮窗";
     public const string ExeName = "GuideOverlay.exe";
     public const string SettingsFileName = "settings.ini";
@@ -13881,13 +13881,13 @@ internal static class SelfTestRunner
         Check(_settings.Opacity == 85 && _settings.Theme == ThemeKind.Light,
             "环境：临时 settings 为默认值（opacity=85 / light）");
 
-        // A1：程序集版本资源与 AppInfo.Version 保持一致（exe 属性页显示 1.1.0.0）
+        // A1：程序集版本资源与 AppInfo.Version 保持一致（exe 属性页显示 1.1.1.0）
         Version asmVersion = Assembly.GetExecutingAssembly().GetName().Version;
         Check(asmVersion != null && asmVersion.ToString(3) == AppInfo.Version,
             "环境：程序集版本与 AppInfo.Version 一致",
             "程序集 " + (asmVersion != null ? asmVersion.ToString() : "null") + "，AppInfo " + AppInfo.Version);
-        Check(asmVersion != null && asmVersion.ToString(4) == "1.1.0.0",
-            "环境：程序集版本为四段 1.1.0.0",
+        Check(asmVersion != null && asmVersion.ToString(4) == "1.1.1.0",
+            "环境：程序集版本为四段 1.1.1.0",
             asmVersion != null ? asmVersion.ToString() : "null");
     }
 
