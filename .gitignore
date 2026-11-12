@@ -1,0 +1,17 @@
+# 本地配置（首次运行自动生成，含个人窗口位置/最近路径）
+settings.ini
+settings.ini.bak
+*.bak
+
+# 构建与自测产物
+obj/
+selftest.log
+selftest-*.png
+*.tmp
+*.pdb
+*.csproj.user
+
+# 个人图片：只保留两张示例图
+images/*.jpg
+images/*.jpeg
+images/755f2c0b39a42fdabec01148ad1fa730.png
